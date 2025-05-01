@@ -3,9 +3,32 @@ const app = express();
 const movies = require("./movies.json");
 const crypto = require("node:crypto");
 const z = require("zod");
+const { validateMovie, validatePartialMovie } = require("./schemas/movies");
 const PORT = process.env.PORT ?? 1234;
+const cors = require("cors");
+
+//Sitios web que pueden acceder a mi API
+const ACCEPTED_ORIGINS = [
+  "http://localhost:1234",
+  "http://localhost:5500",
+  "http://127.0.0.1:5500",
+  "http://moviesapi.com",
+];
 
 app.disable("x-powered-by");
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (ACCEPTED_ORIGINS.includes(origin) || !origin) {
+        callback(null, true);
+      }
+      if (!origin) {
+        return callback(null, true);
+      }
+      //return callback(new Error("Not allowed by CORS")); //Probar como devolver un error, ya que con esto daba error en consolade vscode
+    },
+  })
+);
 
 app.use(express.json());
 app.get("/", (req, res) => {
@@ -14,6 +37,10 @@ app.get("/", (req, res) => {
 
 //GET ALL MOVIES
 app.get("/movies", (req, res) => {
+  // const origin = req.header("origin"); //Forma manual con Node.js
+  // if(ACCEPTED_ORIGINS.includes(origin) || !origin){ //La página origin no envía el header por lo tanto se no existe se le da acceso por default
+  //   res.header("Access-Control-Allow-Origin", origin);
+  // }
   const { genre } = req.query;
   if (genre) {
     const filteredMovies = movies.filter((movie) =>
@@ -38,48 +65,39 @@ app.get("/movies/:id", (req, res) => {
 
 //POST
 app.post("/movies", (req, res) => {
-  const movieSchema = z.object({
-    title: z.string({
-      invalid_type_error: "Movie title must be a string",
-      required_error: "Movie title is required",
-    }),
-    year: z.number().int().positive().min(1900).max(2025),
-    director: z.string(),
-    duration: z.number().int().positive(),
-    rate: z.number().min(0).max(10),
-    poster: z.string().url({
-      message: "Poster must be a valid URL",
-    }),
-    genre: z.array(
-      z.enum([
-        "Action",
-        "Drama",
-        "Adventure",
-        "Comedy",
-        "Fantasy",
-        "Horror",
-        "Thriller",
-        "Sci-Fi",
-        {
-          required_error: "Movie genre is required",
-          invalid_type_error: "Movie genre must be an array of enum Genre",
-        },
-      ])
-    ),
-  });
-  const { title, genre, year, director, duration, rate, poster } = req.body;
+  const result = validateMovie(req.body);
+  // const { title, genre, year, director, duration, rate, poster } = req.body;
+
+  if (result.error) {
+    return res.status(400).json({ error: JSON.parse(result.error.message) });
+  }
+
   const newMovie = {
-    id: crypto.randomUUID(),
-    title,
-    genre,
-    year,
-    director,
-    duration,
-    rate: rate ?? 0,
-    poster,
+    id: crypto.randomUUID(), //uuid v4
+    ...result.data,
   };
   movies.push(newMovie);
   res.status(201).json(newMovie);
+});
+
+//PATCH
+app.patch("/movies/:id", (req, res) => {
+  const result = validatePartialMovie(req.body);
+  if (!result.success) {
+    return res.status(400).json({ error: JSON.parse(result.error.message) });
+  }
+
+  const { id } = req.params;
+  const movieIndex = movies.findIndex((movie) => movie.id === id);
+
+  if (movieIndex === -1) {
+    return res.status(404).json({ message: "Movie not found" });
+  }
+
+  const updatedMovie = { ...movies[movieIndex], ...result.data };
+
+  movies[movieIndex] = updatedMovie;
+  return res.json(updatedMovie);
 });
 
 app.listen(PORT, () => {
